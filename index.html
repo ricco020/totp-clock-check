@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TOTP Clock Check: why your 2FA codes are rejected</title>
+<meta name="description" content="Generate RFC 6238 TOTP codes locally in your browser and measure your device clock drift. Nothing leaves the page.">
+<style>
+:root{--bg:#10141a;--fg:#e8e4da;--acc:#e0a526;--mut:#8a8f98;--ok:#5fbf7f;--ko:#e0664f}
+body{margin:0;background:radial-gradient(circle at 20% 0,#1d2633,var(--bg) 60%);color:var(--fg);font:17px/1.55 Georgia,"Iowan Old Style",serif}
+main{max-width:720px;margin:0 auto;padding:40px 20px}
+h1{font:700 2rem/1.15 "Courier New",monospace;color:var(--acc);margin:0 0 8px}
+h2{font:700 1.15rem "Courier New",monospace;margin-top:2em}
+input{width:100%;box-sizing:border-box;padding:10px;background:#0b0e12;color:var(--fg);border:1px solid #333b47;font:16px "Courier New",monospace}
+.code{font:700 3rem "Courier New",monospace;letter-spacing:.15em;color:var(--acc)}
+.bar{height:6px;background:#333b47}.bar i{display:block;height:6px;background:var(--acc)}
+.ok{color:var(--ok)}.ko{color:var(--ko)}small,.mut{color:var(--mut)}
+a{color:var(--acc)}
+</style>
+</head>
+<body><main>
+<h1>TOTP Clock Check</h1>
+<p class="mut">Most "invalid code" errors with Google Authenticator, Aegis or 2FAS come from a device clock that is off by more than 30 seconds. This page measures that drift and generates RFC 6238 codes locally, with the Web Crypto API. No secret is sent anywhere: the page has no analytics and makes a single request, to itself, to read the server time.</p>
+
+<h2>1. Your clock drift</h2>
+<p id="drift">Measuring...</p>
+
+<h2>2. Generate a code from a secret</h2>
+<label for="sec">Base32 secret (the text under the QR code, spaces ignored)</label>
+<input id="sec" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP">
+<p><label><input type="checkbox" id="srv" style="width:auto"> use server time instead of device time</label></p>
+<div class="code" id="code">------</div>
+<div class="bar"><i id="bar"></i></div>
+<p class="mut" id="prev"></p>
+
+<h2>3. Self-test (RFC 6238 appendix B)</h2>
+<p id="selftest">Running...</p>
+
+<h2>How to read the result</h2>
+<p>Servers usually accept the current 30 second window plus one on each side. A drift under 15 s is harmless. Between 15 and 30 s some logins fail. Above 30 s codes are rejected almost every time: turn on automatic date and time on the phone, then retry. If the code shown here matches your app but the site still refuses it, the secret was probably re-issued and the account needs a new enrolment.</p>
+<p>Choosing an app with encrypted backup matters more than the app itself: if the phone is lost, an app without export means recovering every account by hand. A comparison of eight common authenticator apps (backup, sync, open source) is maintained at <a href="https://www.pwdfortress.com/en/blog/best-authenticator-app-2fa-2026">PwdFortress: best authenticator apps for 2FA</a>.</p>
+<p><small>Source code: <a href="https://github.com/ricco020/totp-clock-check">github.com/ricco020/totp-clock-check</a>, MIT licence.</small></p>
+</main>
+<script>
+const b32="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+function b32dec(s){s=s.toUpperCase().replace(/[\s=-]/g,"");let bits="",out=[];for(const c of s){const v=b32.indexOf(c);if(v<0)throw new Error("invalid character "+c);bits+=v.toString(2).padStart(5,"0")}for(let i=0;i+8<=bits.length;i+=8)out.push(parseInt(bits.slice(i,i+8),2));return new Uint8Array(out)}
+async function hotp(key,counter,digits,algo){const k=await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:algo||"SHA-1"},false,["sign"]);const buf=new ArrayBuffer(8),dv=new DataView(buf);dv.setUint32(0,Math.floor(counter/4294967296));dv.setUint32(4,counter>>>0);const h=new Uint8Array(await crypto.subtle.sign("HMAC",k,buf));const o=h[h.length-1]&15;const n=((h[o]&127)<<24)|(h[o+1]<<16)|(h[o+2]<<8)|h[o+3];return String(n%10**digits).padStart(digits,"0")}
+let offset=0;
+async function measure(){const el=document.getElementById("drift");try{const t0=Date.now();const r=await fetch(location.href.split("#")[0]+"?t="+t0,{method:"HEAD",cache:"no-store"});const t1=Date.now();const d=Date.parse(r.headers.get("Date"));if(!d)throw 0;const mid=(t0+t1)/2;offset=d+500-mid;const s=Math.round(offset/1000);const a=Math.abs(s);el.innerHTML=`Device clock is <b class="${a<15?"ok":"ko"}">${a<1?"in sync (under 1 s)":(s>0?a+" s behind":a+" s ahead")}</b> compared with the server (HTTP Date header, 1 s resolution, round trip ${t1-t0} ms).`+(a>=30?" Codes from this device will be rejected.":"")}catch(e){el.textContent="Could not read the server time from this network."}}
+async function tick(){const now=Date.now()+(document.getElementById("srv").checked?offset:0);const step=Math.floor(now/30000);const left=30-Math.floor(now/1000)%30;document.getElementById("bar").style.width=(left/30*100)+"%";const v=document.getElementById("sec").value.trim();const c=document.getElementById("code"),p=document.getElementById("prev");if(!v){c.textContent="------";p.textContent="";return}try{const key=b32dec(v);c.textContent=await hotp(key,step,6);p.textContent=`previous ${await hotp(key,step-1,6)} . next ${await hotp(key,step+1,6)} . ${left} s left`}catch(e){c.textContent="------";p.textContent=e.message}}
+async function selftest(){const enc=new TextEncoder();const v=[[59,"94287082","SHA-1","12345678901234567890"],[1111111109,"07081804","SHA-1","12345678901234567890"],[1234567890,"89005924","SHA-1","12345678901234567890"],[59,"46119246","SHA-256","12345678901234567890123456789012"],[59,"90693936","SHA-512","1234567890123456789012345678901234567890123456789012345678901234"]];let ok=0;for(const[t,exp,a,s]of v){if(await hotp(enc.encode(s),Math.floor(t/30),8,a)===exp)ok++}document.getElementById("selftest").innerHTML=`<span class="${ok===v.length?"ok":"ko"}">${ok}/${v.length}</span> official test vectors match (SHA-1, SHA-256, SHA-512, 8 digits).`}
+measure();selftest();setInterval(tick,1000);document.getElementById("sec").addEventListener("input",tick);
+</script>
+</body></html>
